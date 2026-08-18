@@ -1,6 +1,6 @@
 /**
  * Serienstream provider for Nuvio
- * Zero-dependency ES5 parser (no external packages needed).
+ * Clean, zero-dependency ES5 parser with JS-redirect & VOE de-obfuscation.
  */
 
 var BASE = 'http://186.2.175.5';
@@ -185,9 +185,9 @@ function rot13(str) {
   });
 }
 
-function decodeVoe(encoded) {
+function decodeVoeString(raw) {
   try {
-    var s = rot13(encoded);
+    var s = rot13(raw);
     var JUNK = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
     for (var i = 0; i < JUNK.length; i++) s = s.split(JUNK[i]).join('_');
     s = s.replace(/_/g, '');
@@ -196,32 +196,56 @@ function decodeVoe(encoded) {
     var s5 = atob(s4.split('').reverse().join(''));
     var data = JSON.parse(s5);
     return data.direct_access_url || data.source || data.file || null;
-  } catch (e) { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
 function resolveVoe(url) {
-  return fetchText(url, { 'Referer': url }).then(function (html) {
-    var m = html.match(/var\s+a168c\s*=\s*['"]([^'"]+)['"]/);
-    if (m) {
-      var direct = decodeVoe(m[1]);
-      if (direct) return { url: direct, quality: '1080p', type: direct.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
-    }
-    var hls = html.match(/'hls':\s*'([^']+)'/) || html.match(/https?:\/\/[^\s'"<>]+?\.m3u8[^\s'"<>]*/);
-    if (hls) {
-      return { url: hls[1] || hls[0], quality: '1080p', type: 'm3u8' };
-    }
-    return null;
-  }).catch(function () { return null; });
+  return fetch(url, { headers: { 'User-Agent': HEADERS['User-Agent'], 'Referer': url } })
+    .then(function (res) { return res.text(); })
+    .then(function (html) {
+      var jsRedirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+      if (jsRedirect) {
+        return resolveVoe(jsRedirect[1]);
+      }
+
+      var jsonScript = html.match(/<script type="application\/json">\s*(\[.*?\])\s*<\/script>/s);
+      if (jsonScript) {
+        try {
+          var raw = JSON.parse(jsonScript[1])[0];
+          var direct = decodeVoeString(raw);
+          if (direct) return { url: direct, quality: '1080p', type: direct.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
+        } catch (e) {}
+      }
+
+      var m = html.match(/var\s+a168c\s*=\s*['"]([^'"]+)['"]/);
+      if (m) {
+        var direct2 = decodeVoeString(m[1]);
+        if (direct2) return { url: direct2, quality: '1080p', type: direct2.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
+      }
+
+      var hls = html.match(/'hls':\s*'([^']+)'/) || html.match(/https?:\/\/[^\s'"<>]+?\.m3u8[^\s'"<>]*/);
+      if (hls) {
+        return { url: hls[1] || hls[0], quality: '1080p', type: 'm3u8' };
+      }
+
+      return null;
+    })
+    .catch(function () { return null; });
 }
 
 function resolveStreamtape(url) {
-  return fetchText(url, { 'Referer': url }).then(function (html) {
-    var m = html.match(/robotlink'\)\.innerHTML = (.+?)\+\s*\('([^']+)'\)/s);
-    if (!m) return null;
-    var link = m[1].replace(/[\s'"]/g, '') + m[2].substring(3);
-    if (link.indexOf('http') !== 0) link = 'https:' + link;
-    return { url: link, quality: '720p', type: 'mp4' };
-  }).catch(function () { return null; });
+  return fetch(url, { headers: { 'User-Agent': HEADERS['User-Agent'], 'Referer': url } })
+    .then(function (res) { return res.text(); })
+    .then(function (html) {
+      var m = html.match(/robotlink'\)\.innerHTML = (.+?)\+\s*\('([^']+)'\)/s);
+      if (!m) return null;
+      var link = m[1].replace(/[\s'"]/g, '') + m[2].substring(3);
+      if (link.indexOf('http') !== 0) link = 'https:' + link;
+      return { url: link, quality: '720p', type: 'mp4' };
+    })
+    .catch(function () { return null; });
 }
 
 function resolveHoster(name, redirectPath) {

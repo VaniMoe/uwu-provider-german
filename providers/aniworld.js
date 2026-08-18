@@ -1,6 +1,6 @@
 /**
  * Aniworld provider for Nuvio
- * Zero-dependency ES5 parser (no external packages needed).
+ * Clean, zero-dependency ES5 parser with JS-redirect & VOE de-obfuscation.
  */
 
 var BASE = 'https://aniworld.to';
@@ -94,7 +94,7 @@ function searchAniworld(query) {
       var it = items[i];
       if (it.link && it.link.indexOf('episode-') === -1 && it.link.indexOf('/stream') !== -1) {
         var link = it.link.indexOf('/') === 0 ? it.link : '/' + it.link;
-        var name = (it.name || it.title || '').replace(/<\/?em>/g, '').trim();
+        var name = (it.title || it.name || '').replace(/<\/?em>/g, '').trim();
         results.push({ title: name, link: fixUrl(link) });
       }
     }
@@ -123,7 +123,6 @@ function findSeriesUrl(titles) {
 
 function findEpisodeUrl(seriesUrl, mediaType, season, episode) {
   return fetchText(seriesUrl).then(function (html) {
-    // Match all season links inside #stream
     var seasonRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
     var match;
     var seasonLinks = [];
@@ -138,7 +137,6 @@ function findEpisodeUrl(seriesUrl, mediaType, season, episode) {
     }
 
     if (seasonLinks.length === 0) {
-      // Direct episode pattern on main page
       seasonLinks.push({ num: 1, href: seriesUrl, isFilme: false });
     }
 
@@ -159,7 +157,6 @@ function findEpisodeUrl(seriesUrl, mediaType, season, episode) {
     return fetchText(targetSeason.href).then(function (sHtml) {
       var targetEp = (mediaType === 'movie') ? 1 : (parseInt(episode, 10) || 1);
       
-      // Match rows with episodeNumber and href
       var epRe = /itemprop="episodeNumber"\s+content="(\d+)"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"/gi;
       var epMatch;
       while ((epMatch = epRe.exec(sHtml)) !== null) {
@@ -168,7 +165,6 @@ function findEpisodeUrl(seriesUrl, mediaType, season, episode) {
         }
       }
 
-      // Fallback regex: look for /episode-X in href
       var fallbackRe = new RegExp('href="([^"]+/(?:episode-|film-)' + targetEp + '[^"]*)"', 'i');
       var fb = sHtml.match(fallbackRe);
       if (fb) return fixUrl(fb[1]);
@@ -180,7 +176,6 @@ function findEpisodeUrl(seriesUrl, mediaType, season, episode) {
 
 function collectHosters(epUrl) {
   return fetchText(epUrl).then(function (html) {
-    // Language map
     var langMap = { '1': 'Deutsch', '2': 'Englisch', '3': 'Ger-Sub' };
     var langRe = /data-lang-key="(\d+)"[^>]*title="([^"]*)"/gi;
     var lm;
@@ -188,7 +183,6 @@ function collectHosters(epUrl) {
       langMap[lm[1]] = lm[2].replace(/^mit\s*/i, '').trim();
     }
 
-    // Hosters
     var hosters = [];
     var hosterRe = /<li[^>]+data-lang-key="(\d+)"[^>]+data-link-target="([^"]+)"[^>]*>[\s\S]*?<h4>([^<]+)<\/h4>/gi;
     var hm;
@@ -211,9 +205,9 @@ function rot13(str) {
   });
 }
 
-function decodeVoe(encoded) {
+function decodeVoeString(raw) {
   try {
-    var s = rot13(encoded);
+    var s = rot13(raw);
     var JUNK = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
     for (var i = 0; i < JUNK.length; i++) s = s.split(JUNK[i]).join('_');
     s = s.replace(/_/g, '');
@@ -222,20 +216,42 @@ function decodeVoe(encoded) {
     var s5 = atob(s4.split('').reverse().join(''));
     var data = JSON.parse(s5);
     return data.direct_access_url || data.source || data.file || null;
-  } catch (e) { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
 function resolveVoe(url) {
   return fetchText(url, { 'Referer': url }).then(function (html) {
+    // Check if VOE does a window.location JS redirect
+    var jsRedirect = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+    if (jsRedirect) {
+      return resolveVoe(jsRedirect[1]);
+    }
+
+    // 1. New pipeline via JSON script
+    var jsonScript = html.match(/<script type="application\/json">\s*(\[.*?\])\s*<\/script>/s);
+    if (jsonScript) {
+      try {
+        var raw = JSON.parse(jsonScript[1])[0];
+        var direct = decodeVoeString(raw);
+        if (direct) return { url: direct, quality: '1080p', type: direct.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
+      } catch (e) {}
+    }
+
+    // 2. var a168c
     var m = html.match(/var\s+a168c\s*=\s*['"]([^'"]+)['"]/);
     if (m) {
-      var direct = decodeVoe(m[1]);
-      if (direct) return { url: direct, quality: '1080p', type: direct.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
+      var direct2 = decodeVoeString(m[1]);
+      if (direct2) return { url: direct2, quality: '1080p', type: direct2.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
     }
+
+    // 3. HLS fallback
     var hls = html.match(/'hls':\s*'([^']+)'/) || html.match(/https?:\/\/[^\s'"<>]+?\.m3u8[^\s'"<>]*/);
     if (hls) {
       return { url: hls[1] || hls[0], quality: '1080p', type: 'm3u8' };
     }
+
     return null;
   }).catch(function () { return null; });
 }
