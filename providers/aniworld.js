@@ -1,13 +1,12 @@
 /**
- * Aniworld provider for Nuvio Local Scrapers
- * Compatible with Hermes & React Native environments.
+ * Aniworld provider for Nuvio
+ * Zero-dependency ES5 parser (no external packages needed).
  */
 
-var cheerio = require('cheerio-without-node-native');
-
 var BASE = 'https://aniworld.to';
-var TMDB_API_KEY = '1865f43a0549ca50d341dd9ab8b29f49';
-var DEFAULT_HEADERS = {
+var TMDB_KEY = '1865f43a0549ca50d341dd9ab8b29f49';
+
+var HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/json,*/*',
   'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8'
@@ -20,279 +19,248 @@ function fixUrl(href) {
   return BASE + (href.indexOf('/') === 0 ? href : '/' + href);
 }
 
-function fetchText(url, options) {
-  var opts = options || {};
-  var headers = Object.assign({}, DEFAULT_HEADERS, opts.headers || {});
-  return fetch(url, Object.assign({}, opts, { headers: headers }))
+function normalize(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function fetchText(url, headers) {
+  var reqHeaders = Object.assign({}, HEADERS, headers || {});
+  return fetch(url, { headers: reqHeaders })
     .then(function (res) {
       if (!res.ok) throw new Error('HTTP ' + res.status + ' on ' + url);
       return res.text();
     });
 }
 
-function fetchJson(url, options) {
-  return fetchText(url, options).then(function (text) {
+function fetchJson(url) {
+  return fetchText(url).then(function (text) {
     return JSON.parse(text);
   });
 }
 
-/**
- * Handles TMDB IDs, IMDb IDs (tt...), and Kitsu IDs
- */
 function getTitles(id, mediaType) {
   var type = (mediaType === 'movie') ? 'movie' : 'tv';
   var idStr = String(id || '');
 
-  // 1. IMDb ID (e.g. tt14208870)
+  // IMDb ID
   if (idStr.indexOf('tt') === 0) {
-    var findUrl = 'https://api.themoviedb.org/3/find/' + idStr + '?api_key=' + TMDB_API_KEY + '&external_source=imdb_id';
-    return fetchJson(findUrl)
+    return fetchJson('https://api.themoviedb.org/3/find/' + idStr + '?api_key=' + TMDB_KEY + '&external_source=imdb_id')
       .then(function (data) {
         var results = (type === 'movie') ? (data.movie_results || []) : (data.tv_results || []);
         if (results.length > 0 && results[0].id) {
-          return getTitlesFromTmdb(results[0].id, type);
+          return fetchTmdbTitles(results[0].id, type);
         }
         return [];
       })
       .catch(function () { return []; });
   }
 
-  // 2. Kitsu ID (e.g. kitsu:1234)
-  if (idStr.indexOf('kitsu:') === 0) {
-    var kId = idStr.replace('kitsu:', '');
-    var kitsuUrl = 'https://kitsu.io/api/edge/anime/' + kId;
-    return fetchJson(kitsuUrl)
-      .then(function (data) {
-        var attr = (data && data.data && data.data.attributes) || {};
-        var titles = [];
-        if (attr.canonicalTitle) titles.push(attr.canonicalTitle);
-        if (attr.titles) {
-          if (attr.titles.en) titles.push(attr.titles.en);
-          if (attr.titles.en_jp) titles.push(attr.titles.en_jp);
-          if (attr.titles.ja_jp) titles.push(attr.titles.ja_jp);
-        }
-        return titles;
-      })
-      .catch(function () { return []; });
-  }
-
-  // 3. Regular numeric TMDB ID
-  return getTitlesFromTmdb(idStr, type);
+  return fetchTmdbTitles(idStr, type);
 }
 
-function getTitlesFromTmdb(tmdbId, type) {
-  var deUrl = 'https://api.themoviedb.org/3/' + type + '/' + tmdbId + '?api_key=' + TMDB_API_KEY + '&language=de-DE';
-  var enUrl = 'https://api.themoviedb.org/3/' + type + '/' + tmdbId + '?api_key=' + TMDB_API_KEY + '&language=en-US';
+function fetchTmdbTitles(tmdbId, type) {
+  var deUrl = 'https://api.themoviedb.org/3/' + type + '/' + tmdbId + '?api_key=' + TMDB_KEY + '&language=de-DE';
+  var enUrl = 'https://api.themoviedb.org/3/' + type + '/' + tmdbId + '?api_key=' + TMDB_KEY + '&language=en-US';
 
   return Promise.all([
-    fetchJson(deUrl).catch(function () { return null; }),
-    fetchJson(enUrl).catch(function () { return null; })
+    fetchJson(deUrl).catch(function () { return {}; }),
+    fetchJson(enUrl).catch(function () { return {}; })
   ]).then(function (res) {
     var de = res[0] || {};
     var en = res[1] || {};
-    var titleSet = {};
-    [de.name, de.title, de.original_name, de.original_title,
-     en.name, en.title, en.original_name, en.original_title]
-      .filter(Boolean)
-      .forEach(function (t) { titleSet[t] = true; });
-    return Object.keys(titleSet);
+    var titles = [];
+    var add = function (t) { if (t && titles.indexOf(t) === -1) titles.push(t); };
+    add(de.name); add(de.title); add(de.original_name); add(de.original_title);
+    add(en.name); add(en.title); add(en.original_name); add(en.original_title);
+    return titles;
   });
 }
 
-function normalize(str) {
-  return (str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
 function searchAniworld(query) {
-  return fetchText(BASE + '/ajax/search', {
+  return fetch(BASE + '/ajax/search', {
     method: 'POST',
-    headers: {
+    headers: Object.assign({}, HEADERS, {
       'Content-Type': 'application/x-www-form-urlencoded',
       'x-requested-with': 'XMLHttpRequest',
       'Referer': BASE + '/search'
-    },
+    }),
     body: 'keyword=' + encodeURIComponent(query)
   })
-  .then(function (res) {
-    var items = JSON.parse(res);
-    return items
-      .filter(function (it) { return it.link && it.link.indexOf('episode-') === -1 && it.link.indexOf('/stream') !== -1; })
-      .map(function (it) {
+  .then(function (res) { return res.json(); })
+  .then(function (items) {
+    if (!Array.isArray(items)) return [];
+    var results = [];
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.link && it.link.indexOf('episode-') === -1 && it.link.indexOf('/stream') !== -1) {
         var link = it.link.indexOf('/') === 0 ? it.link : '/' + it.link;
-        return {
-          title: (it.name || it.title || '').replace(/<\/?em>/g, '').trim(),
-          link: fixUrl(link)
-        };
-      });
+        var name = (it.name || it.title || '').replace(/<\/?em>/g, '').trim();
+        results.push({ title: name, link: fixUrl(link) });
+      }
+    }
+    return results;
   })
   .catch(function () { return []; });
 }
 
 function findSeriesUrl(titles) {
   if (!titles || titles.length === 0) return Promise.resolve(null);
-
-  var index = 0;
-  function next() {
-    if (index >= titles.length) return Promise.resolve(null);
-    var title = titles[index++];
-    return searchAniworld(title).then(function (results) {
-      if (!results || results.length === 0) return next();
-      var target = normalize(title);
-      var exact = results.find(function (r) { return normalize(r.title) === target; });
-      if (exact) return exact.link;
-      return results[0].link;
+  var i = 0;
+  function step() {
+    if (i >= titles.length) return Promise.resolve(null);
+    var t = titles[i++];
+    return searchAniworld(t).then(function (list) {
+      if (!list || list.length === 0) return step();
+      var normT = normalize(t);
+      for (var j = 0; j < list.length; j++) {
+        if (normalize(list[j].title) === normT) return list[j].link;
+      }
+      return list[0].link;
     });
   }
-  return next();
+  return step();
 }
 
 function findEpisodeUrl(seriesUrl, mediaType, season, episode) {
   return fetchText(seriesUrl).then(function (html) {
-    var $ = cheerio.load(html);
+    // Match all season links inside #stream
+    var seasonRe = /<a[^>]+href="([^"]+)"[^>]*>([^<]*)<\/a>/gi;
+    var match;
     var seasonLinks = [];
+    while ((match = seasonRe.exec(html)) !== null) {
+      var href = match[1];
+      if (href.indexOf('/stream/') !== -1 && (href.indexOf('/staffel-') !== -1 || href.indexOf('/filme') !== -1)) {
+        var isFilme = href.indexOf('/filme') !== -1;
+        var sNumMatch = href.match(/\/staffel-(\d+)/i);
+        var sNum = sNumMatch ? parseInt(sNumMatch[1], 10) : (isFilme ? 0 : 1);
+        seasonLinks.push({ num: sNum, href: fixUrl(href), isFilme: isFilme });
+      }
+    }
 
-    $('div#stream > ul:first-child li a').each(function (_, el) {
-      var href = fixUrl($(el).attr('href'));
-      if (!href) return;
-      var isFilme = /\/filme(\/|$)/i.test(href);
-      var staffelMatch = href.match(/\/staffel-(\d+)/i);
-      var num = staffelMatch ? parseInt(staffelMatch[1], 10) : (isFilme ? 0 : NaN);
-      seasonLinks.push({ num: num, href: href, isFilme: isFilme });
-    });
-
-    if (seasonLinks.length === 0) return null;
+    if (seasonLinks.length === 0) {
+      // Direct episode pattern on main page
+      seasonLinks.push({ num: 1, href: seriesUrl, isFilme: false });
+    }
 
     var targetSeason;
     if (mediaType === 'movie') {
-      targetSeason = seasonLinks.find(function (s) { return s.isFilme; }) || seasonLinks[0];
+      for (var k = 0; k < seasonLinks.length; k++) {
+        if (seasonLinks[k].isFilme) { targetSeason = seasonLinks[k]; break; }
+      }
+      if (!targetSeason) targetSeason = seasonLinks[0];
     } else {
-      var reqSeason = parseInt(season, 10) || 1;
-      targetSeason = seasonLinks.find(function (s) { return s.num === reqSeason; }) || seasonLinks[0];
+      var reqS = parseInt(season, 10) || 1;
+      for (var l = 0; l < seasonLinks.length; l++) {
+        if (seasonLinks[l].num === reqS) { targetSeason = seasonLinks[l]; break; }
+      }
+      if (!targetSeason) targetSeason = seasonLinks[0];
     }
 
-    if (!targetSeason) return null;
-
-    return fetchText(targetSeason.href).then(function (seasonHtml) {
-      var $$ = cheerio.load(seasonHtml);
+    return fetchText(targetSeason.href).then(function (sHtml) {
       var targetEp = (mediaType === 'movie') ? 1 : (parseInt(episode, 10) || 1);
-      var episodeUrl = null;
-
-      $$('table.seasonEpisodesList tbody tr').each(function (_, row) {
-        if (episodeUrl) return;
-        var epNum = parseInt($$(row).find('meta[itemprop="episodeNumber"]').attr('content'), 10);
-        if (epNum === targetEp) {
-          var href = $$(row).find('a').first().attr('href');
-          episodeUrl = fixUrl(href);
+      
+      // Match rows with episodeNumber and href
+      var epRe = /itemprop="episodeNumber"\s+content="(\d+)"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"/gi;
+      var epMatch;
+      while ((epMatch = epRe.exec(sHtml)) !== null) {
+        if (parseInt(epMatch[1], 10) === targetEp) {
+          return fixUrl(epMatch[2]);
         }
-      });
+      }
 
-      return episodeUrl;
+      // Fallback regex: look for /episode-X in href
+      var fallbackRe = new RegExp('href="([^"]+/(?:episode-|film-)' + targetEp + '[^"]*)"', 'i');
+      var fb = sHtml.match(fallbackRe);
+      if (fb) return fixUrl(fb[1]);
+
+      return null;
     });
   }).catch(function () { return null; });
 }
 
-function collectHosterLinks(episodeUrl) {
-  return fetchText(episodeUrl).then(function (html) {
-    var $ = cheerio.load(html);
-    var langMap = {};
-    $('div.changeLanguageBox img').each(function (_, el) {
-      var key = $(el).attr('data-lang-key');
-      var title = ($(el).attr('title') || '').replace(/^mit\s*/i, '').trim();
-      if (key) langMap[key] = title;
-    });
+function collectHosters(epUrl) {
+  return fetchText(epUrl).then(function (html) {
+    // Language map
+    var langMap = { '1': 'Deutsch', '2': 'Englisch', '3': 'Ger-Sub' };
+    var langRe = /data-lang-key="(\d+)"[^>]*title="([^"]*)"/gi;
+    var lm;
+    while ((lm = langRe.exec(html)) !== null) {
+      langMap[lm[1]] = lm[2].replace(/^mit\s*/i, '').trim();
+    }
 
+    // Hosters
     var hosters = [];
-    $('div.hosterSiteVideo ul li').each(function (_, el) {
-      var langKey = $(el).attr('data-lang-key');
-      var linkTarget = $(el).attr('data-link-target');
-      var hosterName = $(el).find('h4').text().trim();
-      if (linkTarget) {
-        hosters.push({
-          hosterName: hosterName,
-          lang: langMap[langKey] || langKey || '',
-          redirectPath: fixUrl(linkTarget)
-        });
-      }
-    });
+    var hosterRe = /<li[^>]+data-lang-key="(\d+)"[^>]+data-link-target="([^"]+)"[^>]*>[\s\S]*?<h4>([^<]+)<\/h4>/gi;
+    var hm;
+    while ((hm = hosterRe.exec(html)) !== null) {
+      hosters.push({
+        lang: langMap[hm[1]] || '',
+        redirectUrl: fixUrl(hm[2]),
+        name: hm[3].trim()
+      });
+    }
+
     return hosters;
   }).catch(function () { return []; });
 }
 
-function resolveRedirect(url) {
-  return fetch(url, { headers: Object.assign({}, DEFAULT_HEADERS, { 'Referer': BASE }), redirect: 'follow' })
-    .then(function (res) { return res.url || url; })
-    .catch(function () { return url; });
-}
-
-/* ---------------- Extractors ---------------- */
-
 function rot13(str) {
   return str.replace(/[a-zA-Z]/g, function (c) {
-    var base = c <= 'Z' ? 65 : 97;
-    return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+    var b = c <= 'Z' ? 65 : 97;
+    return String.fromCharCode(((c.charCodeAt(0) - b + 13) % 26) + b);
   });
 }
 
-function decodeVoeString(encoded) {
+function decodeVoe(encoded) {
   try {
     var s = rot13(encoded);
     var JUNK = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
     for (var i = 0; i < JUNK.length; i++) s = s.split(JUNK[i]).join('_');
     s = s.replace(/_/g, '');
-    var step3 = atob(s);
-    var step4 = step3.split('').map(function (c) { return String.fromCharCode(c.charCodeAt(0) - 3); }).join('');
-    var step5 = atob(step4.split('').reverse().join(''));
-    var data = JSON.parse(step5);
-    var source = data.direct_access_url || data.source || data.file;
-    if (!source) return null;
-    return { url: source, quality: 'Auto', type: source.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
+    var s3 = atob(s);
+    var s4 = s3.split('').map(function (c) { return String.fromCharCode(c.charCodeAt(0) - 3); }).join('');
+    var s5 = atob(s4.split('').reverse().join(''));
+    var data = JSON.parse(s5);
+    return data.direct_access_url || data.source || data.file || null;
   } catch (e) { return null; }
 }
 
-function extractVoe(url) {
-  return fetchText(url, { headers: { 'Referer': url } }).then(function (html) {
+function resolveVoe(url) {
+  return fetchText(url, { 'Referer': url }).then(function (html) {
     var m = html.match(/var\s+a168c\s*=\s*['"]([^'"]+)['"]/);
     if (m) {
-      var r = decodeVoeString(m[1]);
-      if (r) return r;
+      var direct = decodeVoe(m[1]);
+      if (direct) return { url: direct, quality: '1080p', type: direct.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4' };
     }
     var hls = html.match(/'hls':\s*'([^']+)'/) || html.match(/https?:\/\/[^\s'"<>]+?\.m3u8[^\s'"<>]*/);
     if (hls) {
-      return { url: hls[1] || hls[0], quality: 'Auto', type: 'm3u8' };
+      return { url: hls[1] || hls[0], quality: '1080p', type: 'm3u8' };
     }
     return null;
   }).catch(function () { return null; });
 }
 
-function extractStreamtape(url) {
-  return fetchText(url, { headers: { 'Referer': url } }).then(function (html) {
+function resolveStreamtape(url) {
+  return fetchText(url, { 'Referer': url }).then(function (html) {
     var m = html.match(/robotlink'\)\.innerHTML = (.+?)\+\s*\('([^']+)'\)/s);
     if (!m) return null;
     var link = m[1].replace(/[\s'"]/g, '') + m[2].substring(3);
     if (link.indexOf('http') !== 0) link = 'https:' + link;
-    return { url: link, quality: 'Auto', type: 'mp4' };
+    return { url: link, quality: '720p', type: 'mp4' };
   }).catch(function () { return null; });
 }
 
-function extractVidoza(url) {
-  return fetchText(url, { headers: { 'Referer': url } }).then(function (html) {
-    var m = html.match(/sourcesCode:\s*\[\{src:\s*"([^"]+)"/) || html.match(/src:\s*"([^"]+\.mp4[^"]*)"/);
-    if (!m) return null;
-    return { url: m[1], quality: 'Auto', type: 'mp4' };
-  }).catch(function () { return null; });
+function resolveHoster(name, redirectPath) {
+  return fetch(redirectPath, { headers: Object.assign({}, HEADERS, { 'Referer': BASE }), redirect: 'follow' })
+    .then(function (res) { return res.url || redirectPath; })
+    .then(function (finalUrl) {
+      var n = (name || '').toLowerCase();
+      if (n.indexOf('voe') !== -1 || finalUrl.indexOf('voe') !== -1) return resolveVoe(finalUrl);
+      if (n.indexOf('streamtape') !== -1 || finalUrl.indexOf('streamtape') !== -1) return resolveStreamtape(finalUrl);
+      return null;
+    })
+    .catch(function () { return null; });
 }
-
-function resolveHoster(hosterName, redirectUrl) {
-  return resolveRedirect(redirectUrl).then(function (finalUrl) {
-    var name = (hosterName || '').toLowerCase();
-    if (name.indexOf('voe') !== -1 || finalUrl.indexOf('voe') !== -1) return extractVoe(finalUrl);
-    if (name.indexOf('streamtape') !== -1 || finalUrl.indexOf('streamtape') !== -1) return extractStreamtape(finalUrl);
-    if (name.indexOf('vidoza') !== -1 || finalUrl.indexOf('vidoza') !== -1) return extractVidoza(finalUrl);
-    return null;
-  });
-}
-
-/* ---------------- Main Interface ---------------- */
 
 function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   var s = parseInt(seasonNum, 10) || 1;
@@ -308,31 +276,29 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
       if (!seriesUrl) return [];
       return findEpisodeUrl(seriesUrl, mType, s, ep);
     })
-    .then(function (episodeUrl) {
-      if (!episodeUrl) return [];
-      return collectHosterLinks(episodeUrl);
+    .then(function (epUrl) {
+      if (!epUrl) return [];
+      return collectHosters(epUrl);
     })
     .then(function (hosters) {
       if (!hosters || hosters.length === 0) return [];
-      var promises = hosters.map(function (h) {
-        return resolveHoster(h.hosterName, h.redirectPath)
-          .then(function (res) {
-            if (!res) return null;
-            return {
-              name: 'Aniworld [' + h.hosterName + ']' + (h.lang ? ' (' + h.lang + ')' : ''),
-              title: h.hosterName,
-              url: res.url,
-              quality: res.quality || 'Auto',
-              type: res.type || 'mp4',
-              headers: { 'Referer': BASE }
-            };
-          })
-          .catch(function () { return null; });
+      var jobs = hosters.map(function (h) {
+        return resolveHoster(h.name, h.redirectUrl).then(function (res) {
+          if (!res || !res.url) return null;
+          return {
+            name: 'Aniworld [' + h.name + ']' + (h.lang ? ' (' + h.lang + ')' : ''),
+            title: h.name + ' - ' + (h.lang || 'Dub/Sub'),
+            url: res.url,
+            quality: res.quality || 'Auto',
+            type: res.type || 'mp4',
+            headers: { 'Referer': BASE }
+          };
+        });
       });
-      return Promise.all(promises);
+      return Promise.all(jobs);
     })
-    .then(function (settled) {
-      return settled.filter(Boolean);
+    .then(function (streams) {
+      return (streams || []).filter(Boolean);
     })
     .catch(function () {
       return [];
@@ -341,6 +307,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { getStreams: getStreams };
-} else {
+}
+if (typeof global !== 'undefined') {
   global.getStreams = getStreams;
 }
