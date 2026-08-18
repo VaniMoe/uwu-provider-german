@@ -3,9 +3,6 @@
   "name": "German Providers",
   "version": "1.0.0",
   "description": "Deutsche Anime- & Serien-Streams (Aniworld.to & Serienstream.to)",
-  "types": ["movie", "series", "anime"],
-  "catalogs": [],
-  "resources": ["stream"],
   "scrapers": [
     {
       "id": "aniworld",
@@ -13,12 +10,13 @@
       "description": "Aniworld.to - deutsche Anime-Streams (Sub/Dub)",
       "version": "1.0.0",
       "author": "Lana",
-      "supportedTypes": ["movie", "tv", "series", "anime"],
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/aniworld.js",
-      "enabled": true,
-      "formats": ["mp4", "m3u8"],
-      "logo": "https://www.google.com/s2/favicons?domain=aniworld.to&sz=128",
-      "contentLanguage": ["de"]
+      "url": "https://raw.githubusercontent.com/VaniMoe/uwu-provider-german/main/providers/aniworld.js",
+      "enabled": true
     },
     {
       "id": "serienstream",
@@ -26,12 +24,12 @@
       "description": "Serienstream.to - deutsche Serien-Streams",
       "version": "1.0.0",
       "author": "Lana",
-      "supportedTypes": ["tv", "series"],
+      "supportedTypes": [
+        "tv"
+      ],
       "filename": "providers/serienstream.js",
-      "enabled": true,
-      "formats": ["mp4", "m3u8"],
-      "logo": "https://www.google.com/s2/favicons?domain=serienstream.to&sz=128",
-      "contentLanguage": ["de"]
+      "url": "https://raw.githubusercontent.com/VaniMoe/uwu-provider-german/main/providers/serienstream.js",
+      "enabled": true
     }
   ]
 }
