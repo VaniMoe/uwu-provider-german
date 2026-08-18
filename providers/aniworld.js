@@ -37,41 +37,81 @@ function fetchJson(url) {
   });
 }
 
-function getTitles(id, mediaType) {
+function getAllAnimeTitles(id, mediaType, season, episode) {
   var type = (mediaType === 'movie') ? 'movie' : 'tv';
   var idStr = String(id || '');
 
+  // If already an IMDb ID
   if (idStr.indexOf('tt') === 0) {
-    return fetchJson('https://api.themoviedb.org/3/find/' + idStr + '?api_key=' + TMDB_KEY + '&external_source=imdb_id')
-      .then(function (data) {
-        var results = (type === 'movie') ? (data.movie_results || []) : (data.tv_results || []);
-        if (results.length > 0 && results[0].id) {
-          return fetchTmdbTitles(results[0].id, type);
-        }
-        return [];
-      })
-      .catch(function () { return []; });
+    return resolveTitlesFromImdb(idStr, type, season, episode);
   }
 
-  return fetchTmdbTitles(idStr, type);
-}
-
-function fetchTmdbTitles(tmdbId, type) {
-  var deUrl = 'https://api.themoviedb.org/3/' + type + '/' + tmdbId + '?api_key=' + TMDB_KEY + '&language=de-DE';
-  var enUrl = 'https://api.themoviedb.org/3/' + type + '/' + tmdbId + '?api_key=' + TMDB_KEY + '&language=en-US';
+  // Pure numeric TMDB ID -> fetch TMDB titles + IMDb ID for MAL mapping
+  var deUrl = 'https://api.themoviedb.org/3/' + type + '/' + idStr + '?api_key=' + TMDB_KEY + '&language=de-DE';
+  var enUrl = 'https://api.themoviedb.org/3/' + type + '/' + idStr + '?api_key=' + TMDB_KEY + '&language=en-US';
+  var altUrl = 'https://api.themoviedb.org/3/' + type + '/' + idStr + '/alternative_titles?api_key=' + TMDB_KEY;
+  var extUrl = 'https://api.themoviedb.org/3/' + type + '/' + idStr + '/external_ids?api_key=' + TMDB_KEY;
 
   return Promise.all([
     fetchJson(deUrl).catch(function () { return {}; }),
-    fetchJson(enUrl).catch(function () { return {}; })
+    fetchJson(enUrl).catch(function () { return {}; }),
+    fetchJson(altUrl).catch(function () { return {}; }),
+    fetchJson(extUrl).catch(function () { return {}; })
   ]).then(function (res) {
     var de = res[0] || {};
     var en = res[1] || {};
-    var titles = [];
-    var add = function (t) { if (t && titles.indexOf(t) === -1) titles.push(t); };
+    var alt = res[2] || {};
+    var ext = res[3] || {};
+
+    var titleList = [];
+    var add = function (t) { if (t && titleList.indexOf(t) === -1) titleList.push(t); };
+
     add(de.name); add(de.title); add(de.original_name); add(de.original_title);
     add(en.name); add(en.title); add(en.original_name); add(en.original_title);
-    return titles;
+
+    var altResults = alt.results || alt.titles || [];
+    for (var i = 0; i < altResults.length; i++) {
+      add(altResults[i].title || altResults[i].name);
+    }
+
+    var imdbId = ext.imdb_id;
+    if (imdbId) {
+      return resolveMalTitle(imdbId, season, episode).then(function (malTitle) {
+        if (malTitle) add(malTitle);
+        return titleList;
+      });
+    }
+
+    return titleList;
   });
+}
+
+function resolveTitlesFromImdb(imdbId, type, season, episode) {
+  return fetchJson('https://api.themoviedb.org/3/find/' + imdbId + '?api_key=' + TMDB_KEY + '&external_source=imdb_id')
+    .then(function (data) {
+      var results = (type === 'movie') ? (data.movie_results || []) : (data.tv_results || []);
+      if (results.length > 0 && results[0].id) {
+        return getAllAnimeTitles(results[0].id, type, season, episode);
+      }
+      return [];
+    })
+    .catch(function () { return []; });
+}
+
+function resolveMalTitle(imdbId, season, episode) {
+  var s = season || 1;
+  var ep = episode || 1;
+  var mapUrl = 'https://id-mapping-api-malid.hf.space/api/resolve?id=' + imdbId + '&s=' + s + '&e=' + ep;
+  return fetchJson(mapUrl)
+    .then(function (mapping) {
+      if (mapping && mapping.mal_id) {
+        return fetchJson('https://api.jikan.moe/v4/anime/' + mapping.mal_id).then(function (jikan) {
+          return (jikan && jikan.data && jikan.data.title) ? jikan.data.title : null;
+        });
+      }
+      return null;
+    })
+    .catch(function () { return null; });
 }
 
 function searchAniworld(query) {
@@ -277,7 +317,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
   var ep = parseInt(episodeNum, 10) || 1;
   var mType = mediaType || 'tv';
 
-  return getTitles(tmdbId, mType)
+  return getAllAnimeTitles(tmdbId, mType, s, ep)
     .then(function (titles) {
       if (!titles || titles.length === 0) return [];
       return findSeriesUrl(titles);
