@@ -1,6 +1,5 @@
 /**
  * Serienstream provider for Nuvio
- * Clean, zero-dependency ES5 parser with JS-redirect & VOE de-obfuscation.
  */
 
 var BASE = 'http://186.2.175.5';
@@ -47,7 +46,6 @@ function fetchJson(url) {
 function getTitles(id, mediaType) {
   var idStr = String(id || '');
 
-  // IMDb ID
   if (idStr.indexOf('tt') === 0) {
     return fetchJson('https://api.themoviedb.org/3/find/' + idStr + '?api_key=' + TMDB_KEY + '&external_source=imdb_id')
       .then(function (data) {
@@ -168,7 +166,7 @@ function collectHosters(epUrl) {
     var hm;
     while ((hm = hosterRe.exec(html)) !== null) {
       hosters.push({
-        lang: langMap[hm[1]] || '',
+        lang: langMap[hm[1]] || 'Deutsch',
         redirectUrl: fixUrl(hm[2]),
         name: hm[3].trim()
       });
@@ -285,19 +283,25 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         return resolveHoster(h.name, h.redirectUrl).then(function (res) {
           if (!res || !res.url) return null;
           return {
-            name: 'Serienstream [' + h.name + ']' + (h.lang ? ' (' + h.lang + ')' : ''),
-            title: h.name + ' - ' + (h.lang || 'Deutsch'),
+            name: "Serienstream",
+            title: h.name + " (" + h.lang + ")",
             url: res.url,
-            quality: res.quality || 'Auto',
-            type: res.type || 'mp4',
-            headers: { 'Referer': BASE }
+            quality: res.quality || "1080p",
+            headers: {
+              "User-Agent": HEADERS["User-Agent"],
+              "Referer": BASE
+            }
           };
         });
       });
       return Promise.all(jobs);
     })
     .then(function (streams) {
-      return (streams || []).filter(Boolean);
+      var valid = (streams || []).filter(Boolean);
+      var qualityOrder = { "1080p": 3, "720p": 2, "480p": 1 };
+      return valid.sort(function (a, b) {
+        return (qualityOrder[b.quality] || 0) - (qualityOrder[a.quality] || 0);
+      });
     })
     .catch(function () {
       return [];
@@ -306,7 +310,6 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { getStreams: getStreams };
-}
-if (typeof global !== 'undefined') {
+} else {
   global.getStreams = getStreams;
 }
